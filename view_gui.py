@@ -1,5 +1,7 @@
 import tkinter as tk
 import tkinter.colorchooser
+import threading
+from collections import deque
 from tkinter import filedialog
 import textwrap
 from PIL import Image, ImageTk, ImageDraw, ImageChops, ImageEnhance
@@ -49,6 +51,9 @@ class Application(tk.Frame):
         self.overlay_visibility = tk.BooleanVar(value=True)
         self.pencil_color = 'white'
         self.pencil_size = 12
+        self.flood_fill_active = False
+        self.ff_threshold = 10
+        self.max_propagation_steps = 10
         self.create_overlay_controls()
 
     def menu_open_clicked(self, event=None):
@@ -145,7 +150,28 @@ class Application(tk.Frame):
 
         self.reset_slice_btn = tk.Button(self.overlay_frame, text="Reset Slice", command=self.reset_to_middle_image)
         self.reset_slice_btn.pack(side=tk.LEFT, padx=5)
- 
+
+        self.max_propagation_var = tk.IntVar(value=self.max_propagation_steps)
+        max_propagation_label = tk.Label(self.suboverlay_frame, text="Max Propagation:")
+        max_propagation_label.pack(side=tk.LEFT, padx=(10, 2))
+
+        max_propagation_slider = tk.Scale(self.suboverlay_frame, from_=1, to=500, orient=tk.HORIZONTAL, command=self.update_max_propagation)
+        max_propagation_slider.set(self.max_propagation_steps)
+        max_propagation_slider.pack(side=tk.LEFT, padx=2)
+
+        max_propagation_value_label = tk.Label(self.suboverlay_frame, textvariable=self.max_propagation_var)
+        max_propagation_value_label.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.bucket_threshold_var = tk.StringVar(value="10")
+        bucket_threshold_label = tk.Label(self.suboverlay_frame, text="FF Threshold:")
+        bucket_threshold_label.pack(side=tk.LEFT, padx=(10, 2))
+
+        self.bucket_threshold_slider = tk.Scale(self.suboverlay_frame, from_=0, to=100, orient=tk.HORIZONTAL, command=self.update_threshold_value)
+        self.bucket_threshold_slider.pack(side=tk.LEFT, padx=2)
+
+        bucket_threshold_value_label = tk.Label(self.suboverlay_frame, textvariable=self.bucket_threshold_var)
+        bucket_threshold_value_label.pack(side=tk.LEFT, padx=(0, 10))
+
     def create_widget(self):
 
         frame_statusbar = tk.Frame(self.master, bd=1, relief = tk.SUNKEN)
@@ -165,6 +191,7 @@ class Application(tk.Frame):
         self.canvas.bind("<Button-3>", self.mouse_down_right)                  # MouseDown
         self.master.bind("<ButtonRelease-3>", self.mouse_up_right)             # MouseUp
         self.canvas.bind("<B3-Motion>", self.mouse_move_right)                 # MouseDrag
+        self.master.bind("f", self.threaded_flood_fill)
         self.canvas.bind("<Motion>", self.mouse_move)                          # MouseMove
         self.canvas.bind("<Leave>", self.mouse_leave_canvas)                   # MouseLeave
         self.canvas.bind("<Double-Button-1>", self.mouse_double_click_left)    # MouseDoubleClick
@@ -201,6 +228,7 @@ class Application(tk.Frame):
         - R to reset to the middle image.
         - C to toggle the drawing color.
         - Double click inside the image to reset the zoom, rotation and slice.
+        - F to flood fill from the selected point
 
         Overlay Controls:
         - Load Overlay: Load an overlay image.
@@ -215,6 +243,8 @@ class Application(tk.Frame):
         - Add SubOverlay: Load one or multiple SubOverlay image. These images are displayed only and not mutable.
         - Clear SubOverlays: Clear all SubOverlays.
         - SubOverlay Opacity: Adjust the opacity of the SubOverlay.
+        - Max Propagation: Select the max numbers of points to color with flood fill
+        - FF Threshold: Specify the threshold to color adjacent points with flood fill
         - Reset Slice: Reset to the middle image.
         """)
         tk.messagebox.showinfo("Help", help_message)
@@ -627,6 +657,69 @@ class Application(tk.Frame):
 
         return image_point
 
+    def update_threshold_value(self, val):
+        self.ff_threshold = int(float(val))
+        self.bucket_threshold_var.set(f"{self.ff_threshold}")
+        print(self.ff_threshold)
+
+    def update_max_propagation(self, val):
+        self.max_propagation_steps = int(float(val))
+        self.max_propagation_var.set(f"{self.max_propagation_steps}")
+
+    def threaded_flood_fill(self, event):
+        click_coordinates = self.to_image_point(event.x, event.y)[:2]
+        click_coordinates[0] = int(click_coordinates[0])
+        click_coordinates[1] = int(click_coordinates[1])
+        click_coordinates = tuple(click_coordinates)
+        # Run flood_fill_3d in a separate thread
+        thread = threading.Thread(target=self.flood_fill_2d, args=(click_coordinates,))
+        thread.start()
+
+    def flood_fill_2d(self, start_coord):
+        self.flood_fill_active = True
+        queue = deque([start_coord])
+        target_color = int(self.pil_image.getpixel(start_coord))
+        visited = set()
+        counter = 0
+        if self.overlay_image.mode == 'RGB':
+            # Convert to a tuple of integers for RGB
+            value = (int(255), int(255), int(255))
+        else:
+            value = int(255)
+        while self.flood_fill_active and queue and counter < self.max_propagation_steps:
+            cx, cy = queue.popleft()
+
+            if (cx, cy) in visited or not (0 <= cx < self.pil_image.width and 0 <= cy < self.pil_image.height):
+                continue
+
+            visited.add((cx, cy))
+
+            
+            pixel_value = int(self.pil_image.getpixel((cx,cy)))
+
+            if abs(pixel_value - target_color) <= self.ff_threshold:
+                try:
+                    self.overlay_image.putpixel((int(cx), int(cy)), value)
+                except TypeError as e:
+                    print(f"Error: {e}, Coordinates: ({cx}, {cy}), Value: {value}, Mode: {self.overlay_image.mode}")
+                counter += 1
+                for dx in [-1, 0, 1]:
+                    for dy in [-1, 0, 1]:
+                        if dx == 0 and dy == 0:
+                            continue
+                        queue.append((cx + dx, cy + dy))
+
+            if counter % 10 == 0:
+                self.redraw_image()
+
+        if self.flood_fill_active == True:
+            self.flood_fill_active = False
+            self.redraw_image()
+
+    def stop_flood_fill(self):
+        self.flood_fill_active = False
+        self.update_log("Flood fill stopped.")
+        
 
     def draw_image(self, pil_image):
         
