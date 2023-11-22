@@ -3,6 +3,8 @@ import tkinter.colorchooser
 from tkinter import filedialog
 import textwrap
 from PIL import Image, ImageTk, ImageDraw, ImageChops, ImageEnhance
+# No decompression bomb error
+Image.MAX_IMAGE_PIXELS = None
 import math
 import numpy as np
 import os
