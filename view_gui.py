@@ -1,13 +1,33 @@
+
+### Julian Schilliger - Crackle Viewer - Vesuvius Challenge 2023
+
 import tkinter as tk
 import tkinter.colorchooser
+import threading
+from collections import deque
 from tkinter import filedialog
 import textwrap
 from PIL import Image, ImageTk, ImageDraw, ImageChops, ImageEnhance
+# Increase the image pixel limit to the desired value
+# Image.MAX_IMAGE_PIXELS = 300000000
+Image.MAX_IMAGE_PIXELS = None
 import math
 import numpy as np
 import os
 import sys
 import glob
+from tqdm import tqdm
+from multiprocessing import Pool
+
+
+def load_image_disk(filename):
+    pil_image = np.array(Image.open(filename))
+    # Convert to 8-bit and grayscale
+    pil_image = np.uint16(pil_image//256)
+    return pil_image
+
+def load_image_parallel(filename):
+    return filename, load_image_disk(filename)
 
 class Application(tk.Frame):
     def __init__(self, master=None):
@@ -29,8 +49,10 @@ class Application(tk.Frame):
         self.load_last_directory()  # Load the last directory
         self.images_folder = ""
         self.pil_image = None
+        self.min_value = 0.0
+        self.max_value = 65535.0
         self.sub_overlays = []
-        self.sub_overlay_colors = ['white', 'green', 'red', 'blue', 'yellow', 'cyan', 'magenta']
+        self.sub_overlay_colors = ['white', 'red', 'green', 'blue', 'yellow', 'cyan', 'magenta']
         self.sub_overlay_names = ['overlay.png']
         self.current_sub_overlay = tk.StringVar() 
         self.current_sub_overlay.set("None") 
@@ -46,7 +68,19 @@ class Application(tk.Frame):
         self.overlay_image = None
         self.overlay_visibility = tk.BooleanVar(value=True)
         self.pencil_color = 'white'
-        self.pencil_size = 12
+        self.pencil_size = 45
+        self.flood_fill_active = False
+        self.ff_threshold = 10
+        self.max_propagation_steps = 10
+        self.global_scale_factor = 1.0
+        self.micron_factor = 0.00324
+        self.resampling_methods = {
+            "NEAREST": Image.Resampling.NEAREST,
+            "BILINEAR": Image.Resampling.BILINEAR,
+            "BICUBIC": Image.Resampling.BICUBIC,
+        }
+        self.resample_method = tk.StringVar(value="NEAREST")
+
         self.create_overlay_controls()
 
     def menu_open_clicked(self, event=None):
@@ -88,6 +122,10 @@ class Application(tk.Frame):
 
         self.save_combined_btn = tk.Button(self.overlay_frame, text="Save Combined Overlays", command=self.save_combined_overlays)
         self.save_combined_btn.pack(side=tk.LEFT)
+
+        self.save_displayed_btn = tk.Button(self.overlay_frame, text="Save Displayed Image", command=self.save_displayed_image)
+        self.save_displayed_btn.pack(side=tk.LEFT)
+
         
         self.overlay_check = tk.Checkbutton(self.overlay_frame, text="Show Overlay", variable=self.overlay_visibility, command=self.toggle_overlay)
         self.overlay_check.pack(side=tk.LEFT)
@@ -100,7 +138,7 @@ class Application(tk.Frame):
         self.color_label.bind("<Button-1>", lambda e: self.toggle_color()) # Add this line in create_overlay_controls method
 
         # Add slider for overlay opacity control
-        self.overlay_opacity_scale = tk.Scale(self.overlay_frame, from_=0, to_=255, orient=tk.HORIZONTAL, label="Overlay Opacity")
+        self.overlay_opacity_scale = tk.Scale(self.overlay_frame, from_=0, to_=255, orient=tk.HORIZONTAL, label="Overlay Opacity", length=175)
         self.overlay_opacity_scale.bind("<Motion>", self.adjust_overlay_opacity) # Bind the slider's motion to adjust opacity
         self.overlay_opacity_scale.pack(side=tk.LEFT)
         self.overlay_opacity_scale.config(from_=0, to=1, resolution=0.01)
@@ -115,7 +153,7 @@ class Application(tk.Frame):
         self.pick_color_btn = tk.Button(self.overlay_frame, text="Pick Color", command=self.pick_color)
         self.pick_color_btn.pack(side=tk.LEFT)
         
-        self.size_scale = tk.Scale(self.overlay_frame, from_=1, to_=200, orient=tk.HORIZONTAL, label="Pencil Size")
+        self.size_scale = tk.Scale(self.overlay_frame, from_=1, to_=500, orient=tk.HORIZONTAL, label="Pencil Size", length=125)
         self.size_scale.set(self.pencil_size)
         self.size_scale.pack(side=tk.LEFT)
 
@@ -135,15 +173,139 @@ class Application(tk.Frame):
         self.clear_suboverlays_btn = tk.Button(self.suboverlay_frame, text="Clear SubOverlays", command=self.clear_suboverlays)
         self.clear_suboverlays_btn.pack(side=tk.LEFT)
 
-        self.suboverlay_opacity_scale = tk.Scale(self.suboverlay_frame, from_=0, to=255, orient=tk.HORIZONTAL, label="SubOverlay Opacity")
+        # make sure to add enough space to display full name of the suboverlay
+        self.suboverlay_opacity_scale = tk.Scale(self.suboverlay_frame, from_=0, to=255, orient=tk.HORIZONTAL, label="SubOverlay Opacity", length=175)
         self.suboverlay_opacity_scale.bind("<Motion>", self.adjust_suboverlay_opacity)
         self.suboverlay_opacity_scale.pack(side=tk.LEFT)
         self.suboverlay_opacity_scale.config(from_=0, to=1, resolution=0.01)
         self.suboverlay_opacity_scale.set(0.4)
+        # spaceing between the two scales
+        tk.Label(self.suboverlay_frame, text=" ").pack(side=tk.LEFT)
+
+        self.suboverlay_brightness_scale = tk.Scale(self.suboverlay_frame, from_=0, to=255, orient=tk.HORIZONTAL, label="SubOverlay Brightness", length=175)
+        self.suboverlay_brightness_scale.bind("<Motion>", self.adjust_suboverlay_opacity)
+        self.suboverlay_brightness_scale.pack(side=tk.LEFT)
+        self.suboverlay_brightness_scale.config(from_=0, to=10.0, resolution=0.01)
+        self.suboverlay_brightness_scale.set(1.0)
+
+        # Dropdown menu for resampling method
+        
+        self.resample_method_label = tk.Label(self.suboverlay_frame, text="Resampling Method:")
+        self.resample_method_label.pack(side=tk.LEFT)
+        self.resample_method_optionmenu = tk.OptionMenu(
+            self.suboverlay_frame, 
+            self.resample_method, 
+            *self.resampling_methods.keys(),
+            command=self.on_resample_method_changed
+        )
+        self.resample_method_optionmenu.pack(side=tk.LEFT)
+
+        # Set min and max values for the image
+        self.minmax_label = tk.Label(self.overlay_frame, text="Min Max image values:")
+        self.minmax_label.pack(side=tk.LEFT)
+        self.min_value_entry = tk.Entry(self.overlay_frame, width=5)
+        self.min_value_entry.pack(side=tk.LEFT, padx=5)
+        self.min_value_entry.insert(tk.END, '0')
+        self.min_value_entry.bind('<Return>', self.set_max_min_from_entry)
+
+        self.max_value_entry = tk.Entry(self.overlay_frame, width=5)
+        self.max_value_entry.pack(side=tk.LEFT, padx=5)
+        self.max_value_entry.insert(tk.END, '65535')
+        self.max_value_entry.bind('<Return>', self.set_max_min_from_entry)
+
+        # micron factor for the image
+        self.micron_label = tk.Label(self.overlay_frame, text="Micron Factor:")
+        self.micron_label.pack(side=tk.LEFT)
+        self.micron_entry = tk.Entry(self.overlay_frame, width=5)
+        self.micron_entry.pack(side=tk.LEFT, padx=5)
+        self.micron_entry.insert(tk.END, '0.00324')
+        self.micron_entry.bind('<Return>', self.set_micron_factor)
 
         self.reset_slice_btn = tk.Button(self.overlay_frame, text="Reset Slice", command=self.reset_to_middle_image)
         self.reset_slice_btn.pack(side=tk.LEFT, padx=5)
- 
+
+        self.max_propagation_var = tk.IntVar(value=self.max_propagation_steps)
+        max_propagation_label = tk.Label(self.suboverlay_frame, text="Max Propagation:")
+        max_propagation_label.pack(side=tk.LEFT, padx=(10, 2))
+
+        max_propagation_slider = tk.Scale(self.suboverlay_frame, from_=1, to=500, orient=tk.HORIZONTAL, command=self.update_max_propagation)
+        max_propagation_slider.set(self.max_propagation_steps)
+        max_propagation_slider.pack(side=tk.LEFT, padx=2)
+
+        max_propagation_value_label = tk.Label(self.suboverlay_frame, textvariable=self.max_propagation_var)
+        max_propagation_value_label.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.bucket_threshold_var = tk.StringVar(value="10")
+        bucket_threshold_label = tk.Label(self.suboverlay_frame, text="FF Threshold:")
+        bucket_threshold_label.pack(side=tk.LEFT, padx=(10, 2))
+
+        self.bucket_threshold_slider = tk.Scale(self.suboverlay_frame, from_=0, to=100, orient=tk.HORIZONTAL, command=self.update_threshold_value)
+        self.bucket_threshold_slider.pack(side=tk.LEFT, padx=2)
+
+        bucket_threshold_value_label = tk.Label(self.suboverlay_frame, textvariable=self.bucket_threshold_var)
+        bucket_threshold_value_label.pack(side=tk.LEFT, padx=(0, 10))
+
+        # New Frame for Image Processing Controls
+        self.image_processing_frame = tk.Frame(self.master)
+        self.image_processing_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=10)
+
+        # Operation Dropdown
+        self.operation_var = tk.StringVar(value="max")
+        self.operation_menu = tk.OptionMenu(
+            self.image_processing_frame, 
+            self.operation_var, 
+            "max", "min", "mean",
+            command=self.operation_changed
+        )
+        self.operation_menu.pack(side=tk.LEFT)
+
+        # Radius Input
+        self.radius_var = tk.StringVar(value="0")
+        self.radius_entry = tk.Entry(
+            self.image_processing_frame, 
+            textvariable=self.radius_var,
+            width=5
+        )
+        self.radius_entry.pack(side=tk.LEFT)
+        self.radius_entry.bind('<Return>', self.update_radius_and_refocus)
+
+        # Direction Radio Buttons
+        self.direction_var = tk.StringVar(value="omi")
+        directions = [("omi", "omi"), ("front", "front"), ("back", "back")]
+        for text, mode in directions:
+            tk.Radiobutton(
+                self.image_processing_frame, 
+                text=text, 
+                variable=self.direction_var, 
+                value=mode
+            ).pack(side=tk.LEFT)
+
+        self.direction_var.trace("w", lambda name, index, mode: self.process_images())
+
+        # Preload Images Checkbox
+        self.preload_images_var = tk.BooleanVar(value=False)
+        self.preload_images_check = tk.Checkbutton(
+            self.image_processing_frame, 
+            text="Preload Images", 
+            variable=self.preload_images_var,
+            command=self.toggle_preload
+        )
+        self.preload_images_check.pack(side=tk.LEFT)
+
+        self.layer_control_frame = tk.Frame(self.master)
+        self.layer_control_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=10)
+
+        self.layer_index_label = tk.Label(self.layer_control_frame, text="Layer Index:")
+        self.layer_index_label.pack(side=tk.LEFT, padx=5)
+
+        self.layer_index_var = tk.StringVar(value=str(self.image_index))
+        self.layer_index_entry = tk.Entry(self.layer_control_frame, textvariable=self.layer_index_var, width=6)
+        self.layer_index_entry.pack(side=tk.LEFT, padx=5)
+        self.layer_index_entry.bind('<Return>', self.set_layer_from_entry)
+
+        self.set_layer_btn = tk.Button(self.layer_control_frame, text="Set Layer", command=self.set_layer_from_entry)
+        self.set_layer_btn.pack(side=tk.LEFT, padx=5)
+
     def create_widget(self):
 
         frame_statusbar = tk.Frame(self.master, bd=1, relief = tk.SUNKEN)
@@ -163,6 +325,7 @@ class Application(tk.Frame):
         self.canvas.bind("<Button-3>", self.mouse_down_right)                  # MouseDown
         self.master.bind("<ButtonRelease-3>", self.mouse_up_right)             # MouseUp
         self.canvas.bind("<B3-Motion>", self.mouse_move_right)                 # MouseDrag
+        self.master.bind("f", self.threaded_flood_fill)                        # FloodFill
         self.canvas.bind("<Motion>", self.mouse_move)                          # MouseMove
         self.canvas.bind("<Leave>", self.mouse_leave_canvas)                   # MouseLeave
         self.canvas.bind("<Double-Button-1>", self.mouse_double_click_left)    # MouseDoubleClick
@@ -185,6 +348,11 @@ class Application(tk.Frame):
         self.master.bind("<Left>", self.show_previous_image)
         self.master.bind("<Right>", self.show_next_image)
 
+    # Update radius and refocus method
+    def update_radius_and_refocus(self, event=None):
+        self.master.focus()  # Set focus back to the master window
+        self.process_images()
+ 
     def show_help(self):
         help_message = textwrap.dedent("""
         Vesuvius Crackle Viewer Usage:
@@ -199,6 +367,7 @@ class Application(tk.Frame):
         - R to reset to the middle image.
         - C to toggle the drawing color.
         - Double click inside the image to reset the zoom, rotation and slice.
+        - F to flood fill from the selected point
 
         Overlay Controls:
         - Load Overlay: Load an overlay image.
@@ -209,11 +378,18 @@ class Application(tk.Frame):
         - Overlay Opacity: Adjust the opacity of the overlay.
         - Pick Color: Choose a custom drawing color.
         - Adjust the Pencil Size for drawing on the overlay.
+        - Adjust the image brightness and contrast with the Min Max image values.
+        - Adjust the micron factor for the image for the scale bar.
         - Dropdown to select active overlay for drawing.
         - Add SubOverlay: Load one or multiple SubOverlay image. These images are displayed only and not mutable.
         - Clear SubOverlays: Clear all SubOverlays.
         - SubOverlay Opacity: Adjust the opacity of the SubOverlay.
+        - Max Propagation: Select the max numbers of points to color with flood fill
+        - FF Threshold: Specify the threshold to color adjacent points with flood fill
         - Reset Slice: Reset to the middle image.
+        - Composite image: Compose multiple tif images into one image. Can use min, max or mean operation. Can specify the number of slices and direction of the images to be composed.
+        - Preload Images: Preload all images in the folder. This will speed up the navigation between images and composition of images.
+        - Layer Index: Set the current image to the specified layer index.
         """)
         tk.messagebox.showinfo("Help", help_message)
 
@@ -228,6 +404,40 @@ class Application(tk.Frame):
         except FileNotFoundError:
             self.last_directory = None
 
+    def toggle_preload(self):
+        if self.preload_images_var.get():
+            self.preload_all_images()
+        else:
+            self.flush_preloaded_images()
+
+    def preload_all_images(self):
+        self.preloaded_images = {}
+
+        with Pool() as pool:
+            results = list(tqdm(pool.imap(load_image_parallel, self.image_list), total=len(self.image_list)))
+            
+        for filename, image in results:
+            self.preloaded_images[filename] = image
+
+    ## Single threaded version
+    # def preload_all_images(self):
+    #     self.preloaded_images = {}
+    #     for i, img_path in enumerate(tqdm(self.image_list)):
+    #         self.preloaded_images[img_path] = self.load_image(img_path, as_np=True)
+
+    def flush_preloaded_images(self):
+        self.preloaded_images = {}
+
+    def load_image(self, filename, as_np=False):
+        if self.preload_images_var.get() and filename in self.preloaded_images:
+            pil_image = self.preloaded_images[filename]
+        else:
+            pil_image = load_image_disk(filename)
+        # pil_image = np.clip(pil_image, 0, 255)
+        if not as_np:
+            pil_image = Image.fromarray(np.uint8(pil_image)).convert("L")
+        return pil_image
+    
     def load_images(self):
         initial_dir =self.last_directory if self.last_directory else os.getcwd()
         images_path = tk.filedialog.askdirectory(
@@ -240,6 +450,9 @@ class Application(tk.Frame):
             self.save_last_directory()  # Save the last_directory
             self.image_list = sorted(glob.glob(os.path.join(self.last_directory, '*.tif')))
             self.image_index = len(self.image_list) // 2
+            
+            if self.preload_images_var.get():
+                self.preload_all_images()
             self.set_image(self.image_list[self.image_index])
 
     def load_overlay_image(self):
@@ -250,7 +463,8 @@ class Application(tk.Frame):
             file_path = tk.filedialog.askopenfilename(filetypes=[('PNG files', '*.png')], initialdir=os.getcwd())
         if file_path:
             print(file_path, self.last_directory)
-            self.overlay_image = Image.open(file_path).convert("L").convert("1")
+            self.overlay_image = Image.open(file_path).convert("L")
+            # self.overlay_image = Image.fromarray(np.uint8(np.array(Image.open(file_path)))).convert("L")
             if len(self.sub_overlays) == 0:
                 self.sub_overlays.append(self.overlay_image)
             else:
@@ -267,7 +481,7 @@ class Application(tk.Frame):
         reference_image = Image.open(self.image_list[0])
         width, height = reference_image.size
         # Changed from RGBA to 'L' for grayscale and set initial color to black
-        self.overlay_image = Image.new("L", (width, height), "black").convert("1")
+        self.overlay_image = Image.new("L", (width, height), "black")
         if len(self.sub_overlays) == 0:
             self.sub_overlays.append(self.overlay_image)
         else:
@@ -280,11 +494,16 @@ class Application(tk.Frame):
     def load_suboverlay(self):
         initial_dir = os.path.dirname(self.last_directory) if self.last_directory else os.getcwd()
         try:
-            file_path = tk.filedialog.askopenfilename(filetypes=[('PNG files', '*.png')], initialdir=initial_dir)
+            file_path = tk.filedialog.askopenfilename(filetypes=[('PNG files', '*.png'), ('TIF files', '*.tif')], initialdir=initial_dir)
         except:
-            file_path = tk.filedialog.askopenfilename(filetypes=[('PNG files', '*.png')], initialdir=os.getcwd())
+            file_path = tk.filedialog.askopenfilename(filetypes=[('PNG files', '*.png'), ('TIF files', '*.tif')], initialdir=os.getcwd())
         if file_path:
-            sub_overlay = Image.open(file_path).convert("L").convert("1")
+            if ".png" in file_path:
+                sub_overlay = Image.open(file_path).convert("L")
+            elif ".tif" in file_path:
+                sub_overlay = Image.fromarray(np.uint8(np.array(Image.open(file_path))//256)).convert("L")
+            else:
+                raise ValueError("File type not supported.")
             self.sub_overlays.append(sub_overlay)
             self.redraw_image()
             # strip the file name from the path and save directory
@@ -375,6 +594,36 @@ class Application(tk.Frame):
                 # strip the file name from the path and save directory
                 self.last_directory = save_path.rsplit('/', 1)[0] + "/" + self.images_folder
 
+    def save_displayed_image(self):
+        if self.pil_image is None:
+            tk.messagebox.showerror("Error", "No image to save.")
+            return
+
+        initial_dir = os.path.dirname(self.last_directory) if self.last_directory else os.getcwd()
+        # Asks the user for the location and name of the file to save
+        try:
+            file_path = tk.filedialog.asksaveasfilename(
+                defaultextension=".tif",
+                filetypes=[("TIFF files", "*.tif"), ("All files", "*.*")],
+                initial_dir=initial_dir
+            )
+        except:
+            file_path = tk.filedialog.asksaveasfilename(
+                defaultextension=".tif",
+                filetypes=[("TIFF files", "*.tif"), ("All files", "*.*")],
+                initialdir=os.getcwd()
+            )
+
+        if not file_path:
+            # User cancelled the save operation
+            return
+
+        # The current state of the image is in self.pil_image
+        # You might need to apply any additional transformations or overlays
+        # that you want to be included in the saved image
+        self.pil_image.save(file_path)
+
+
     def toggle_overlay(self):
         self.redraw_image()
 
@@ -387,11 +636,32 @@ class Application(tk.Frame):
         self.redraw_image()
 
     def set_opacity_from_entry(self, event=None):
+        self.master.focus()
         try:
             val = float(self.overlay_opacity_entry.get())
             if 0 <= val <= 1:
                 self.overlay_opacity_scale.set(val)
                 self.adjust_overlay_opacity()
+        except ValueError:
+            pass
+
+    def set_max_min_from_entry(self, event=None):
+        self.master.focus()
+        try:
+            val = float(self.min_value_entry.get())
+            self.min_value = val
+            val = float(self.max_value_entry.get())
+            self.max_value = val
+            self.set_image(self.image_list[self.image_index])
+        except ValueError:
+            pass
+
+    def set_micron_factor(self, event=None):
+        self.master.focus()
+        try:
+            val = float(self.micron_entry.get())
+            self.micron_factor = val
+            self.redraw_image()
         except ValueError:
             pass
 
@@ -408,15 +678,56 @@ class Application(tk.Frame):
         self.pencil_color = 'white' if self.pencil_color == 'black' else 'black'
         label_color = 'black' if self.pencil_color == 'black' else self.sub_overlay_colors[0]
         self.color_label.config(background=label_color) # Update the color preview$
-        
+
+    def on_resample_method_changed(self, selected_method):
+        self.resample_method.set(selected_method)
+        self.redraw_image()
+
+    def calculate_image_range(self, radius, direction):
+        if direction == "omi":
+            start_index = max(0, self.image_index - radius)
+            end_index = min(len(self.image_list), self.image_index + radius + 1)
+        elif direction == "front":
+            start_index = self.image_index
+            end_index = min(len(self.image_list), self.image_index + radius + 1)
+        elif direction == "back":
+            start_index = max(0, self.image_index - radius)
+            end_index = self.image_index + 1
+        return start_index, end_index
+    
+    def process_images(self):
+        radius = int(self.radius_var.get())
+        direction = self.direction_var.get()
+        start_index, end_index = self.calculate_image_range(radius, direction)
+
+        # Stack images as a 3D NumPy array
+        images = np.stack([self.load_image(self.image_list[i], as_np=True) for i in tqdm(range(start_index, end_index))])
+
+        if images.size > 0:
+            if images.size == 1:
+                result_image = images[0]
+            else:
+                operation = self.operation_var.get()
+                if operation == "max":
+                    result_image = np.max(images, axis=0)
+                elif operation == "min":
+                    result_image = np.min(images, axis=0)
+                elif operation == "mean":
+                    result_image = np.mean(images, axis=0)
+
+            if self.min_value != 0 or self.max_value != 65535:
+                result_image = (result_image - (self.min_value / 256.0)) * ( 65535.0 / (self.max_value - self.min_value))
+                result_image = np.clip(result_image, 0, 255)
+            result_image = result_image.astype(np.uint8)
+            self.pil_image = Image.fromarray(result_image).convert("L")
+            self.redraw_image()
+
     def set_image(self, filename):
         if not filename:
             return
 
-        self.pil_image = Image.open(filename)
-        # Convert to 8-bit and grayscale
-        self.pil_image = Image.fromarray(np.uint8(np.array(self.pil_image)//256)).convert("L")
-        self.draw_image(self.pil_image)
+        self.process_images()
+        # self.draw_image(self.pil_image)
 
         self.master.title(self.my_title + " - " + os.path.basename(filename))
         self.label_image_info["text"] = f"{self.pil_image.format} : {self.pil_image.width} x {self.pil_image.height} {self.pil_image.mode}"
@@ -429,10 +740,24 @@ class Application(tk.Frame):
         self.redraw_image()
         self.update_suboverlay_dropdown()
 
+    def operation_changed(self, _):
+        self.process_images()
+
     def reset_to_middle_image(self, event=None):
         self.image_index = len(self.image_list) // 2
         self.set_image(self.image_list[self.image_index])
 
+    def set_layer_from_entry(self, event=None):
+        try:
+            layer_index = int(self.layer_index_var.get())
+            if 0 <= layer_index < len(self.image_list):
+                self.image_index = layer_index
+                self.set_image(self.image_list[self.image_index])
+            else:
+                tk.messagebox.showerror("Error", "Layer index out of range.")
+        except ValueError:
+            tk.messagebox.showerror("Error", "Invalid layer index.")
+        self.master.focus()  # Shift focus away from the entry field
 
     def show_previous_image(self, event):
         if self.image_index > 0:
@@ -444,8 +769,22 @@ class Application(tk.Frame):
             self.image_index += 1
             self.set_image(self.image_list[self.image_index])
 
+    def generate_line(self, event):
+        draw = ImageDraw.Draw(self.overlay_image)
+        old_point = tuple(self.to_image_point(self.__old_event.x, self.__old_event.y)[:2])
+        new_point = tuple(self.to_image_point(event.x, event.y)[:2])
+        width = self.size_scale.get()
+        draw.line([old_point, new_point], fill=self.pencil_color, width=width, joint='curve')
+        # Draw circle with radius with/2
+        draw.ellipse([old_point[0]-width/2, old_point[1]-width/2, old_point[0]+width/2, old_point[1]+width/2], fill=self.pencil_color)
+        draw.ellipse([new_point[0]-width/2, new_point[1]-width/2, new_point[0]+width/2, new_point[1]+width/2], fill=self.pencil_color)
+
+        self.redraw_image()
+
     def mouse_down_left(self, event):
         self.__old_event = event
+        if self.shift_pressed and self.overlay_image:
+            self.generate_line(event)
         self.mouse_is_pressed = True  # Mouse button pressed
 
     def mouse_up_left(self, event):  
@@ -453,6 +792,8 @@ class Application(tk.Frame):
 
     def mouse_down_right(self, event):
         self.__old_event = event
+        if self.overlay_image:
+            self.generate_line(event)
         self.mouse_is_pressed_right = True  # Mouse button pressed
 
     def mouse_up_right(self, event):  
@@ -464,14 +805,7 @@ class Application(tk.Frame):
 
         # Check if shift is pressed and mouse is dragged to draw
         if self.shift_pressed and self.mouse_is_pressed and self.overlay_image:
-            draw = ImageDraw.Draw(self.overlay_image)
-            old_point = tuple(self.to_image_point(self.__old_event.x, self.__old_event.y)[:2])
-            new_point = tuple(self.to_image_point(event.x, event.y)[:2])
-            width = self.size_scale.get()
-            draw.line([old_point, new_point], fill=self.pencil_color, width=width, joint='curve')
-            # Draw circle with radius with/2
-            draw.ellipse([old_point[0]-width/2, old_point[1]-width/2, old_point[0]+width/2, old_point[1]+width/2], fill=self.pencil_color)
-            draw.ellipse([new_point[0]-width/2, new_point[1]-width/2, new_point[0]+width/2, new_point[1]+width/2], fill=self.pencil_color)
+            self.generate_line(event)
         else: # Else case for dragging
             self.translate(event.x - self.__old_event.x, event.y - self.__old_event.y)
 
@@ -482,14 +816,8 @@ class Application(tk.Frame):
         if (self.pil_image == None) or (not self.mouse_is_pressed_right): # Check if mouse button is pressed
             return
 
-        draw = ImageDraw.Draw(self.overlay_image)
-        old_point = tuple(self.to_image_point(self.__old_event.x, self.__old_event.y)[:2])
-        new_point = tuple(self.to_image_point(event.x, event.y)[:2])
-        width = self.size_scale.get()
-        draw.line([old_point, new_point], fill=self.pencil_color, width=width, joint='curve')
-        # Draw circle with radius with/2
-        draw.ellipse([old_point[0]-width/2, old_point[1]-width/2, old_point[0]+width/2, old_point[1]+width/2], fill=self.pencil_color)
-        draw.ellipse([new_point[0]-width/2, new_point[1]-width/2, new_point[0]+width/2, new_point[1]+width/2], fill=self.pencil_color)
+        if self.overlay_image:
+            self.generate_line(event)
 
         self.redraw_image()
         self.__old_event = event
@@ -500,14 +828,9 @@ class Application(tk.Frame):
             self.canvas.delete(self.cursor_circle)
         
         # Draw the new circle
-        x, y = event.x, event.y
-        # Extract scaling factor from the affine matrix
-        try:
-            scaling_factor = self.mat_affine[0, 0]
-        except:
-            scaling_factor = 1
+        x, y = event.x, event.y 
 
-        r = (self.size_scale.get() * scaling_factor)// 2  # radius of circle
+        r = (self.size_scale.get() * self.global_scale_factor)// 2  # radius of circle
         self.cursor_circle = self.canvas.create_oval(x-r, y-r, x+r, y+r, outline=self.pencil_color)
 
         if (self.pil_image == None):
@@ -569,6 +892,7 @@ class Application(tk.Frame):
         mat[1, 1] = scale
 
         self.mat_affine = np.dot(mat, self.mat_affine)
+        self.global_scale_factor = self.mat_affine[0, 0]
 
     def scale_at(self, scale:float, cx:float, cy:float):
 
@@ -625,9 +949,96 @@ class Application(tk.Frame):
 
         return image_point
 
+    def create_ruler(self, img_width, img_height, width, height, unit_size, min_unit_length=15):
+        """
+        Create a ruler image with the specified width, height, and unit size.
+        """
+        unit_size = int(unit_size)
+        unit_size = max(1, unit_size)  # Ensure unit size is at least 1
+        ruler = Image.new('RGBA', (img_width, img_height), (255, 255, 255, 0))
+        draw = ImageDraw.Draw(ruler)
+
+        unit_range = range(height, width, unit_size)
+        if len(unit_range) < min_unit_length:
+            unit_range = [i for i in range(height, height + min_unit_length*unit_size, unit_size)]
+
+        # Draw ruler lines and numbers
+        for i in unit_range:
+            line_height = height // 2 if (i - height) % (5 * unit_size) else height
+            draw.line([(i + height, 0), (i + height, line_height)], fill="white", width=1)
+            draw.text((i + height, line_height), str((i - height) // unit_size), fill="white")
+
+        # Draw ruler lines and numbers
+        for i in unit_range:
+            line_height = height // 2 if (i - height) % (5 * unit_size) else height
+            draw.line([(0, i + height), (line_height, i + height)], fill="white", width=1)
+            draw.text((line_height, i + height), str((i - height) // unit_size), fill="white")
+
+        return ruler
+    
+    def update_threshold_value(self, val):
+        self.ff_threshold = int(float(val))
+        self.bucket_threshold_var.set(f"{self.ff_threshold}")
+        print(self.ff_threshold)
+
+    def update_max_propagation(self, val):
+        self.max_propagation_steps = int(float(val))
+        self.max_propagation_var.set(f"{self.max_propagation_steps}")
+
+    def threaded_flood_fill(self, event):
+        if self.flood_fill_active:
+            return
+        self.flood_fill_active = True
+        click_coordinates = self.to_image_point(event.x, event.y)[:2]
+        click_coordinates[0] = int(click_coordinates[0])
+        click_coordinates[1] = int(click_coordinates[1])
+        click_coordinates = tuple(click_coordinates)
+        # Run flood_fill_3d in a separate thread
+        thread = threading.Thread(target=self.flood_fill_2d, args=(click_coordinates,))
+        thread.start()
+
+    def flood_fill_2d(self, start_coord):
+        pil_image = self.pil_image
+        queue = deque([start_coord])
+        target_color = int(pil_image.getpixel(start_coord))
+        visited = set()
+        counter = 0
+        if self.overlay_image.mode == 'RGB':
+            # Convert to a tuple of integers for RGB
+            value = (int(255), int(255), int(255))
+        else:
+            value = int(255)
+        while self.flood_fill_active and queue and counter < self.max_propagation_steps:
+            cx, cy = queue.popleft()
+
+            if (cx, cy) in visited or not (0 <= cx < pil_image.width and 0 <= cy < pil_image.height):
+                continue
+
+            visited.add((cx, cy))
+
+
+            pixel_value = int(pil_image.getpixel((cx,cy)))
+
+            if abs(pixel_value - target_color) <= self.ff_threshold:
+                try:
+                    self.overlay_image.putpixel((int(cx), int(cy)), value)
+                except TypeError as e:
+                    print(f"Error: {e}, Coordinates: ({cx}, {cy}), Value: {value}, Mode: {self.overlay_image.mode}")
+                counter += 1
+                for dx in [-1, 0, 1]:
+                    for dy in [-1, 0, 1]:
+                        if dx == 0 and dy == 0:
+                            continue
+                        queue.append((cx + dx, cy + dy))
+
+            if counter % 10 == 0:
+                self.redraw_image()
+
+        if self.flood_fill_active == True:
+            self.flood_fill_active = False
+            self.redraw_image()
 
     def draw_image(self, pil_image):
-        
         if pil_image == None:
             return
 
@@ -645,9 +1056,9 @@ class Application(tk.Frame):
 
         dst = self.pil_image.transform(
                     (canvas_width, canvas_height),
-                    Image.AFFINE,   
+                    Image.Transform.AFFINE,   
                     affine_inv,   
-                    Image.NEAREST   
+                    self.resampling_methods[self.resample_method.get()]
                     )
         
         if dst.mode != 'RGBA':
@@ -660,9 +1071,9 @@ class Application(tk.Frame):
 
                 sub_overlay_transformed = sub_overlay.transform(
                     (canvas_width, canvas_height),
-                    Image.AFFINE,
+                    Image.Transform.AFFINE,
                     affine_inv,
-                    Image.NEAREST
+                    self.resampling_methods[self.resample_method.get()]
                 )
                 
                 # Ensure the image is RGBA (has an alpha channel)
@@ -671,10 +1082,13 @@ class Application(tk.Frame):
 
                 r, g, b, a = sub_overlay_transformed.split()
                 grayscale = sub_overlay_transformed.convert("L")
+                # Scale the RGB values based on the brightness slider
+                grayscale = ImageEnhance.Brightness(grayscale).enhance(self.suboverlay_brightness_scale.get())
                 alpha = grayscale  # Use grayscale directly, without inverting
                 sub_overlay_color = Image.new('RGB', sub_overlay_transformed.size, self.sub_overlay_colors[i])
                 final_sub_overlay = Image.composite(sub_overlay_color, sub_overlay_transformed, grayscale)
                 final_sub_overlay.putalpha(alpha)
+
 
                 # Adjust the opacity based on the value of the slider
                 alpha = ImageEnhance.Brightness(alpha).enhance(self.suboverlay_opacity_scale.get())
@@ -686,9 +1100,9 @@ class Application(tk.Frame):
         if self.overlay_visibility.get() and self.overlay_image:
             overlay_transformed = self.overlay_image.transform(
                 (canvas_width, canvas_height),
-                Image.AFFINE,
+                Image.Transform.AFFINE,
                 affine_inv,
-                Image.NEAREST
+                self.resampling_methods[self.resample_method.get()]
             )
             
             # Ensure the image is RGBA (has an alpha channel)
@@ -708,6 +1122,18 @@ class Application(tk.Frame):
 
             dst.paste(final_overlay, (0, 0), final_overlay)
 
+        # Add a ruler to the bottom right of the image
+        ruler_width, ruler_height = 500, 100  # Customize as needed
+        unit_size = self.global_scale_factor * (1.0 / self.micron_factor)  # Customize the unit size for the ruler
+        image_width, image_height = dst.size
+        ruler = self.create_ruler(image_width, image_height, ruler_width, ruler_height, unit_size)
+
+        # Calculate position for the ruler (bottom right)
+        ruler_position = (0, 0)
+
+        # Paste the ruler onto the image
+        dst.paste(ruler, ruler_position, ruler)
+
         im = ImageTk.PhotoImage(image=dst)
 
         item = self.canvas.create_image(
@@ -717,6 +1143,8 @@ class Application(tk.Frame):
                 )
 
         self.image = im
+        # Update the layer index display
+        self.layer_index_var.set(str(self.image_index))
 
     def redraw_image(self):
         if self.pil_image == None:
