@@ -3,11 +3,13 @@
 
 ![Crackle-Viewer Logo](crackle_viewer.png)
 
-## Overview
+## Awards
+
 3rd place entry for the [Ink Detection Followup Prize for the Vesuvius Challenge 2023](https://scrollprize.substack.com/p/ink-detection-followup-prize-winners).
 
 Winning entry for the [Vesuvius Challenge Open Source Prizes December 2023](https://scrollprize.substack.com/p/open-source-prizes-awarded).
 
+## Overview
 
 This tool is designed to assist researchers and enthusiasts in inspecting and labeling ink residue on virtually unrolled scrolls that were carbonized during the Vesuvius eruption nearly 2000 years ago. The primary goal is to generate a ground-truth ink dataset to make these virtually unrolled Vesuvius scrolls readable, as it's difficult to discern ink residue by the naked eye.
 
