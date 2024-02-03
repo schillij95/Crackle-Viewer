@@ -4,10 +4,11 @@
 ![Crackle-Viewer Logo](crackle_viewer.png)
 
 ## Awards
+This project won multiple awards in the [Vesuvius Challenge 2023](https://scrollprize.org/):
 
-3rd place entry for the [Ink Detection Followup Prize for the Vesuvius Challenge 2023](https://scrollprize.substack.com/p/ink-detection-followup-prize-winners).
+- 3rd place entry for the [Ink Detection Followup Prize for the Vesuvius Challenge 2023](https://scrollprize.substack.com/p/ink-detection-followup-prize-winners).
 
-Winning entry for the [Vesuvius Challenge Open Source Prizes December 2023](https://scrollprize.substack.com/p/open-source-prizes-awarded).
+- Winning entry for the [Vesuvius Challenge Open Source Prizes December 2023](https://scrollprize.substack.com/p/open-source-prizes-awarded).
 
 ## Overview
 
