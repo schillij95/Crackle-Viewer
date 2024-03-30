@@ -347,7 +347,9 @@ class Application(tk.Frame):
 
         # Bind left and right arrow keys for previous and next functionality
         self.master.bind("<Left>", self.show_previous_image)
+        self.master.bind("<Left>", lambda event: self.show_previous_image(event, 5) if event.state & 0x1 else self.show_previous_image(event))
         self.master.bind("<Right>", self.show_next_image)
+        self.master.bind("<Right>", lambda event: self.show_next_image(event, 5) if event.state & 0x1 else self.show_next_image(event))
 
     # Update radius and refocus method
     def update_radius_and_refocus(self, event=None):
@@ -710,8 +712,6 @@ class Application(tk.Frame):
 
         # Stack images as a 3D NumPy array
         images = np.stack([self.load_image(self.image_list[i], as_np=True) for i in tqdm(range(start_index, end_index))])
-        print(images.shape)
-        print(images.dtype)
         if images.size > 0:
             if images.size == 1:
                 result_image = images[0]
@@ -768,14 +768,14 @@ class Application(tk.Frame):
             tk.messagebox.showerror("Error", "Invalid layer index.")
         self.master.focus()  # Shift focus away from the entry field
 
-    def show_previous_image(self, event):
-        if self.image_index > 0:
-            self.image_index -= 1
+    def show_previous_image(self, event, image_offset=1):
+        if self.image_index - image_offset > 0:
+            self.image_index -= image_offset
             self.set_image(self.image_list[self.image_index])
 
-    def show_next_image(self, event):
-        if self.image_index < len(self.image_list) - 1:
-            self.image_index += 1
+    def show_next_image(self, event, image_offset=1):
+        if self.image_index < len(self.image_list) - image_offset:
+            self.image_index += image_offset
             self.set_image(self.image_list[self.image_index])
 
     def generate_line(self, event):
