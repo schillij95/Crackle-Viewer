@@ -710,8 +710,6 @@ class Application(tk.Frame):
 
         # Stack images as a 3D NumPy array
         images = np.stack([self.load_image(self.image_list[i], as_np=True) for i in tqdm(range(start_index, end_index))])
-        print(images.shape)
-        print(images.dtype)
         if images.size > 0:
             if images.size == 1:
                 result_image = images[0]
