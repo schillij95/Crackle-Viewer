@@ -22,8 +22,9 @@ from multiprocessing import Pool
 
 def load_image_disk(filename):
     pil_image = np.array(Image.open(filename))
-    # Convert to 8-bit and grayscale
-    pil_image = np.uint16(pil_image//256)
+    # Convert to 8-bit and grayscale if needed
+    if pil_image.dtype == np.uint16:
+        pil_image = np.uint16(pil_image//256)
     return pil_image
 
 def load_image_parallel(filename):
@@ -448,7 +449,14 @@ class Application(tk.Frame):
             print(self.last_directory)
             self.images_folder = self.last_directory.rsplit('/', 1)[-1]
             self.save_last_directory()  # Save the last_directory
-            self.image_list = sorted(glob.glob(os.path.join(self.last_directory, '*.tif')))
+            self.image_list = sorted(glob.glob(os.path.join(self.last_directory, f'*.tif')))
+            #hacky way to get png and jpg file stacks
+            if len(self.image_list) == 0:
+                self.image_list = sorted(glob.glob(os.path.join(self.last_directory, f'*.png')))
+            if len(self.image_list) == 0:
+                self.image_list = sorted(glob.glob(os.path.join(self.last_directory, f'*.jpg')))
+            if len(self.image_list) == 0:
+                print("No tif, png or jpg images found in the directory.")
             self.image_index = len(self.image_list) // 2
             
             if self.preload_images_var.get():
@@ -702,7 +710,8 @@ class Application(tk.Frame):
 
         # Stack images as a 3D NumPy array
         images = np.stack([self.load_image(self.image_list[i], as_np=True) for i in tqdm(range(start_index, end_index))])
-
+        print(images.shape)
+        print(images.dtype)
         if images.size > 0:
             if images.size == 1:
                 result_image = images[0]
