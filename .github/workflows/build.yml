@@ -84,16 +84,15 @@ jobs:
           }
           core.setOutput('upload_url', uploadUrl);
     - name: Zip Executable and Dependencies
+      shell: pwsh
       run: |
-        if [ "${{ runner.os }}" = "Windows" ]; then
+        if (${{ runner.os }} -eq "Windows") {
           # PowerShell command for Windows
-          Compress-Archive -Path dist/* -DestinationPath ../${{ runner.os }}-Executable.zip
-        else
-          # Use zip command for Linux and macOS
-          cd dist
-          zip -r ../${{ runner.os }}-Executable.zip ./*
-          cd ..
-        fi
+          Compress-Archive -Path dist/* -DestinationPath "../${{ runner.os }}-Executable.zip"
+        } else {
+          # Switch to Bash for Linux and macOS
+          bash -c "cd dist && zip -r ../${{ runner.os }}-Executable.zip ./* && cd .."
+        }
     - name: Upload Release Asset
       uses: actions/upload-release-asset@v1
       env:
