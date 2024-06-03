@@ -89,7 +89,7 @@ jobs:
         $osType = "${{ runner.os }}"
         if ($osType -eq "Windows") {
           # PowerShell command for Windows
-          Compress-Archive -Path dist/* -DestinationPath "../$osType-Executable.zip"
+          Compress-Archive -Path dist/* -DestinationPath "$osType-Executable.zip"
         } else {
           # Use PowerShell's native capabilities to handle Linux/macOS zipping if necessary
           # Moving to a shell script file if needed
