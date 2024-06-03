@@ -57,6 +57,7 @@ jobs:
             tag: 'latest-release'
           }).catch(() => null);
           
+          let uploadUrl;
           if (release) {
             console.log(`Updating release: ${release.data.id}`);
             const updatedRelease = await github.rest.repos.updateRelease({
@@ -68,7 +69,7 @@ jobs:
               draft: false,
               prerelease: false
             });
-            return updatedRelease.data.upload_url;
+            uploadUrl = updatedRelease.data.upload_url;
           } else {
             console.log('Creating new release');
             const newRelease = await github.rest.repos.createRelease({
@@ -79,14 +80,15 @@ jobs:
               draft: false,
               prerelease: false
             });
-            return newRelease.data.upload_url;
+            uploadUrl = newRelease.data.upload_url;
           }
+          core.setOutput('upload_url', uploadUrl);
     - name: Upload Release Asset
       uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        upload_url: ${{ steps.create_release.outputs }}
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
         asset_path: ./dist/${{ matrix.os }}-Executable.zip
         asset_name: ${{ matrix.os }}.zip
         asset_content_type: application/zip
