@@ -86,12 +86,14 @@ jobs:
     - name: Zip Executable and Dependencies
       shell: pwsh
       run: |
-        if (${{ runner.os }} -eq "Windows") {
+        $osType = "${{ runner.os }}"
+        if ($osType -eq "Windows") {
           # PowerShell command for Windows
-          Compress-Archive -Path dist/* -DestinationPath "../${{ runner.os }}-Executable.zip"
+          Compress-Archive -Path dist/* -DestinationPath "../$osType-Executable.zip"
         } else {
-          # Switch to Bash for Linux and macOS
-          bash -c "cd dist && zip -r ../${{ runner.os }}-Executable.zip ./* && cd .."
+          # Use PowerShell's native capabilities to handle Linux/macOS zipping if necessary
+          # Moving to a shell script file if needed
+          & bash -c "cd dist && zip -r ../$osType-Executable.zip ./* && cd .."
         }
     - name: Upload Release Asset
       uses: actions/upload-release-asset@v1
