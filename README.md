@@ -78,6 +78,12 @@ Please read trough the "Help" menu for more information.
 
 ## Usage
 
+### Download Executable
+
+1. Go to the [Latest Release]([https://github.com/ImagingSolution/PythonImageViewer](https://github.com/schillij95/Crackle-Viewer/releases/tag/latest-release)) and download the .zip for your operating system.
+2. Unpack the .zip folder.
+3. Start the executable inside the unpacked folder.
+   
 ### Basic Usage
 
 1. To run the tool using Python:
