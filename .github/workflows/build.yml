@@ -83,6 +83,24 @@ jobs:
             uploadUrl = newRelease.data.upload_url;
           }
           core.setOutput('upload_url', uploadUrl);
+
+          // Delete existing assets if they exist
+          const assets = await github.rest.repos.listReleaseAssets({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            release_id: release ? release.data.id : newRelease.data.id,
+          });
+
+          for (const asset of assets.data) {
+            if (asset.name === '${{ runner.os }}.zip') {
+              await github.rest.repos.deleteReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                asset_id: asset.id
+              });
+              console.log(`Deleted existing asset: ${asset.name}`);
+            }
+          }
     - name: Zip Executable and Dependencies
       shell: pwsh
       run: |
