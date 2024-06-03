@@ -85,9 +85,15 @@ jobs:
           core.setOutput('upload_url', uploadUrl);
     - name: Zip Executable and Dependencies
       run: |
-        cd dist
-        zip -r ../${{ runner.os }}-Executable.zip ./*
-        cd ..
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          # PowerShell command for Windows
+          Compress-Archive -Path dist/* -DestinationPath ../${{ runner.os }}-Executable.zip
+        else
+          # Use zip command for Linux and macOS
+          cd dist
+          zip -r ../${{ runner.os }}-Executable.zip ./*
+          cd ..
+        fi
     - name: Upload Release Asset
       uses: actions/upload-release-asset@v1
       env:
