@@ -83,12 +83,17 @@ jobs:
             uploadUrl = newRelease.data.upload_url;
           }
           core.setOutput('upload_url', uploadUrl);
+    - name: Zip Executable and Dependencies
+      run: |
+        cd dist
+        zip -r ../${{ runner.os }}-Executable.zip ./*
+        cd ..
     - name: Upload Release Asset
       uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./dist/${{ runner.os }}-Executable.zip
+        asset_path: ${{ runner.os }}-Executable.zip
         asset_name: ${{ runner.os }}.zip
         asset_content_type: application/zip
