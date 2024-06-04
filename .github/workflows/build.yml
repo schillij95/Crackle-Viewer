@@ -29,10 +29,13 @@ jobs:
         os: [ubuntu-20.04, macos-12, windows-2019]
     steps:
     - uses: actions/checkout@v2
-    - name: Uninstall Tcl/Tk on macOS
+    - name: Reinstall Tcl/Tk on macOS
       if: runner.os == 'macOS'
       run: |
         brew uninstall --ignore-dependencies tcl-tk
+        brew tap-new $USER/tcl-tk
+        brew extract --version=8.5 tcl-tk $USER/tcl-tk
+        brew install $USER/tcl-tk/tcl-tk@8.5
     - name: Set up Python
       uses: actions/setup-python@v2
       with:
