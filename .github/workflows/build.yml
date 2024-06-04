@@ -36,7 +36,7 @@ jobs:
     - name: Uninstall Tcl/Tk on macOS
       if: runner.os == 'macOS'
       run: |
-        brew uninstall tcl-tk
+        brew uninstall --ignore-dependencies tcl-tk
     - name: Install PyInstaller and Dependencies
       run: |
         python -m pip install --upgrade pip
