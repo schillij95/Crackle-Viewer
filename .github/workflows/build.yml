@@ -38,6 +38,10 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install pyinstaller
+    - name: Install Tcl/Tk on macOS
+      if: runner.os == 'macOS'
+      run: |
+        brew install tcl-tk
     - name: Build with PyInstaller
       run: |
         pyinstaller crackle_viewer.spec
