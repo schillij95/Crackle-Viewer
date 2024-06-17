@@ -901,7 +901,10 @@ class Application(tk.Frame):
         mat[1, 1] = scale
 
         self.mat_affine = np.dot(mat, self.mat_affine)
-        self.global_scale_factor = self.mat_affine[0, 0]
+        scale_x = (self.mat_affine[0, 0]**2 + self.mat_affine[0, 1]**2)**0.5
+        scale_y = (self.mat_affine[1, 0]**2 + self.mat_affine[1, 1]**2)**0.5
+        assert scale_x == scale_y, "Non-uniform scaling is not supported."
+        self.global_scale_factor = scale_x
 
     def scale_at(self, scale:float, cx:float, cy:float):
 
