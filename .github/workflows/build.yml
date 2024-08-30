@@ -15,10 +15,10 @@ permissions:
 on:
   push:
     branches:
-      - main
+      - master
   pull_request:
     branches:
-      - main
+      - master
   workflow_dispatch:
 
 jobs:
@@ -46,51 +46,64 @@ jobs:
       with:
         name: ${{ runner.os }}-Executable
         path: dist/*
-    - name: Create or Update Release
+    - name: Delete Old Release and Create New Release
       id: create_release
       uses: actions/github-script@v5
       with:
         script: |
-          const release = await github.rest.repos.getReleaseByTag({
+          const tag = 'latest-release';
+    
+          // Get the latest commit SHA on the current branch (master)
+          const latestCommit = process.env.GITHUB_SHA;
+    
+          // Attempt to get the release by tag
+          let release;
+          try {
+            release = await github.rest.repos.getReleaseByTag({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag: tag
+            });
+          } catch (error) {
+            if (error.status === 404) {
+              console.log('No existing release found with the tag, creating a new one.');
+            } else {
+              throw error;
+            }
+          }
+    
+          // If release exists, delete it
+          if (release) {
+            console.log(`Deleting existing release: ${release.data.id}`);
+            await github.rest.repos.deleteRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.data.id
+            });
+            console.log(`Deleted release: ${release.data.id}`);
+          }
+    
+          // Create a new release with the latest commit SHA
+          console.log('Creating new release');
+          const newRelease = await github.rest.repos.createRelease({
             owner: context.repo.owner,
             repo: context.repo.repo,
-            tag: 'latest-release'
-          }).catch(() => null);
+            tag_name: tag,
+            name: 'Latest Release',
+            draft: false,
+            prerelease: false,
+            target_commitish: latestCommit // Ensure release points to the latest commit
+          });
+    
+          core.setOutput('upload_url', newRelease.data.upload_url);
           
-          let uploadUrl;
-          if (release) {
-            console.log(`Updating release: ${release.data.id}`);
-            const updatedRelease = await github.rest.repos.updateRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: release.data.id,
-              tag_name: 'latest-release',
-              name: 'Latest Release',
-              draft: false,
-              prerelease: false
-            });
-            uploadUrl = updatedRelease.data.upload_url;
-          } else {
-            console.log('Creating new release');
-            const newRelease = await github.rest.repos.createRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag_name: 'latest-release',
-              name: 'Latest Release',
-              draft: false,
-              prerelease: false
-            });
-            uploadUrl = newRelease.data.upload_url;
-          }
-          core.setOutput('upload_url', uploadUrl);
-
-          // Delete existing assets if they exist
+          // Optionally, clean up existing assets associated with the deleted release
           const assets = await github.rest.repos.listReleaseAssets({
             owner: context.repo.owner,
             repo: context.repo.repo,
-            release_id: release ? release.data.id : newRelease.data.id,
+            release_id: newRelease.data.id,
           });
-
+    
           for (const asset of assets.data) {
             if (asset.name === '${{ runner.os }}.zip') {
               await github.rest.repos.deleteReleaseAsset({
