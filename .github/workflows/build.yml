@@ -53,6 +53,9 @@ jobs:
         script: |
           const tag = 'latest-release';
     
+          // Get the latest commit SHA on the current branch (master)
+          const latestCommit = process.env.GITHUB_SHA;
+    
           // Attempt to get the release by tag
           let release;
           try {
@@ -80,7 +83,7 @@ jobs:
             console.log(`Deleted release: ${release.data.id}`);
           }
     
-          // Create a new release
+          // Create a new release with the latest commit SHA
           console.log('Creating new release');
           const newRelease = await github.rest.repos.createRelease({
             owner: context.repo.owner,
@@ -88,7 +91,8 @@ jobs:
             tag_name: tag,
             name: 'Latest Release',
             draft: false,
-            prerelease: false
+            prerelease: false,
+            target_commitish: latestCommit // Ensure release points to the latest commit
           });
     
           core.setOutput('upload_url', newRelease.data.upload_url);
