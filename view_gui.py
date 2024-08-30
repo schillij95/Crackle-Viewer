@@ -33,6 +33,7 @@ def load_image_parallel(filename):
 class Application(tk.Frame):
     def __init__(self, master=None):
         super().__init__(master)
+        self.base_dir = os.path.dirname(os.path.abspath(__file__))
         self.my_title = "Vesuvius Crackle Viewer"
         self.master.title(self.my_title)
         if getattr(sys, 'frozen', False):
@@ -397,12 +398,14 @@ class Application(tk.Frame):
         tk.messagebox.showinfo("Help", help_message)
 
     def save_last_directory(self):
-        with open("last_directory.txt", "w") as file:
+        file_path = os.path.join(self.base_dir, "last_directory.txt")
+        with open(file_path, "w") as file:
             file.write(self.last_directory)
 
     def load_last_directory(self):
+        file_path = os.path.join(self.base_dir, "last_directory.txt")
         try:
-            with open("last_directory.txt", "r") as file:
+            with open(file_path, "r") as file:
                 self.last_directory = file.read().strip()
         except FileNotFoundError:
             self.last_directory = None
