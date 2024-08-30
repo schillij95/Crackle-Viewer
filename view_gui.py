@@ -903,11 +903,16 @@ class Application(tk.Frame):
         self.mat_affine = np.dot(mat, self.mat_affine)
         scale_x = (self.mat_affine[0, 0]**2 + self.mat_affine[0, 1]**2)**0.5
         scale_y = (self.mat_affine[1, 0]**2 + self.mat_affine[1, 1]**2)**0.5
-        assert scale_x == scale_y, "Non-uniform scaling is not supported."
         self.global_scale_factor = scale_x
+        # Correct small errors in the affine matrix
+        scale_y = scale_x
+        self.mat_affine[1, 1] = self.mat_affine[0, 0]
+        self.mat_affine[1, 0] = -self.mat_affine[0, 1]
+        # assert self.mat_affine[0, 0] == self.mat_affine[1, 1], f"Non-uniform scaling is not supported on affine (0,0) vs (1,1) {self.mat_affine[0, 0]} != {self.mat_affine[1, 1]}"
+        # assert self.mat_affine[0, 1] == -self.mat_affine[1, 0], f"Non-uniform scaling is not supported on affine (0,1) -(1,0) {self.mat_affine[0, 1]} != {self.mat_affine[1, 0]}"
+        # assert scale_x == scale_y, f"Non-uniform scaling is not supported on scale {scale_x} != {scale_y}"
 
     def scale_at(self, scale:float, cx:float, cy:float):
-
         self.translate(-cx, -cy)
         self.scale(scale)
         self.translate(cx, cy)
@@ -950,17 +955,21 @@ class Application(tk.Frame):
 
         self.scale(scale)
         self.translate(offsetx, offsety)
-
+    
+    def to_image_point_unchecked(self, x, y):
+        mat_inv = np.linalg.inv(self.mat_affine)
+        image_point = np.dot(mat_inv, (x, y, 1.))
+        return image_point
+    
     def to_image_point(self, x, y):
         if self.pil_image == None:
             return []
-        mat_inv = np.linalg.inv(self.mat_affine)
-        image_point = np.dot(mat_inv, (x, y, 1.))
+        image_point = self.to_image_point_unchecked(x, y)
         if  image_point[0] < 0 or image_point[1] < 0 or image_point[0] > self.pil_image.width or image_point[1] > self.pil_image.height:
             return []
 
         return image_point
-
+    
     def create_ruler(self, img_width, img_height, width, height, unit_size, min_unit_length=15):
         """
         Create a ruler image with the specified width, height, and unit size.
