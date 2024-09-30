@@ -1,4 +1,4 @@
-name: Build Application
+name: Build and Release Application
 
 permissions:
   contents: write
@@ -16,9 +16,6 @@ on:
   push:
     branches:
       - master
-  pull_request:
-    branches:
-      - master
   workflow_dispatch:
 
 jobs:
@@ -26,82 +23,114 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-20.04, macos-12, windows-2019]
-        include:
-          - os: ubuntu-20.04
-            create_release: true
-          - os: macos-12
-            create_release: false
-          - os: windows-2019
-            create_release: false
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
+
     - name: Set up Python
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@v4
       with:
         python-version: '3.11'
+
     - name: Install PyInstaller and Dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install pyinstaller
+
     - name: Build with PyInstaller
       run: |
         pyinstaller crackle_viewer.spec
 
     - name: Upload Artifacts
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v3
       with:
         name: ${{ matrix.os }}-Executable
         path: dist/*
 
-    # Step to create/delete the release is only run on one OS (Ubuntu in this case)
-    - name: Delete Old Release and Create New Release
-      if: matrix.create_release == 'true'
+    # Create release from the latest commit name
+    - name: Create or Update Release
       id: create_release
-      uses: actions/github-script@v5
+      uses: actions/github-script@v6
       with:
         script: |
-          const tag = 'latest-release';
-          const latestCommit = process.env.GITHUB_SHA;
-          let release;
+          const commitMessage = context.payload.head_commit.message.trim().replace(/\s+/g, '-');
+          const owner = context.repo.owner;
+          const repo = context.repo.repo;
 
+          // Check if a release with this commit message already exists
+          let release;
           try {
             release = await github.rest.repos.getReleaseByTag({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag: tag
+              owner: owner,
+              repo: repo,
+              tag: commitMessage
             });
+            console.log(`Release for tag ${commitMessage} already exists.`);
           } catch (error) {
             if (error.status === 404) {
-              console.log('No existing release found with the tag, creating a new one.');
+              console.log(`No release found for tag ${commitMessage}. Creating a new release.`);
+              release = await github.rest.repos.createRelease({
+                owner: owner,
+                repo: repo,
+                tag_name: commitMessage,
+                name: commitMessage,
+                draft: false,
+                prerelease: false,
+                target_commitish: context.sha,
+              });
             } else {
               throw error;
             }
           }
 
-          if (release) {
-            console.log(`Deleting existing release: ${release.data.id}`);
-            await github.rest.repos.deleteRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: release.data.id
-            });
-            console.log(`Deleted release: ${release.data.id}`);
-          }
+          core.setOutput('release_id', release.data.id);
+          core.setOutput('upload_url', release.data.upload_url);
 
-          console.log('Creating new release');
-          const newRelease = await github.rest.repos.createRelease({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            tag_name: tag,
-            name: 'Latest Release',
-            draft: false,
-            prerelease: false,
-            target_commitish: latestCommit
+    # Delete releases that are not the latest commit
+    - name: Delete Old Releases
+      if: matrix.os == 'ubuntu-latest' # This only needs to be done once, so limit it to one job (Ubuntu)
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const currentCommitMessage = context.payload.head_commit.message.trim().replace(/\s+/g, '-');
+          const owner = context.repo.owner;
+          const repo = context.repo.repo;
+
+          // Get all releases
+          const releases = await github.rest.repos.listReleases({
+            owner: owner,
+            repo: repo,
           });
 
-          core.setOutput('upload_url', newRelease.data.upload_url);
+          // Loop through the releases and delete those not matching the current commit message
+          for (const release of releases.data) {
+            if (release.tag_name !== currentCommitMessage) {
+              console.log(`Deleting old release: ${release.tag_name}`);
+              await github.rest.repos.deleteRelease({
+                owner: owner,
+                repo: repo,
+                release_id: release.id
+              });
+
+              // Delete the associated tag if it exists
+              try {
+                await github.rest.git.deleteRef({
+                  owner: owner,
+                  repo: repo,
+                  ref: `tags/${release.tag_name}`,
+                });
+                console.log(`Deleted tag: ${release.tag_name}`);
+              } catch (error) {
+                if (error.status === 404) {
+                  console.log(`Tag ${release.tag_name} does not exist.`);
+                } else {
+                  throw error;
+                }
+              }
+            }
+          }
 
     - name: Zip Executable and Dependencies
       run: |
@@ -110,12 +139,12 @@ jobs:
         else
           zip -r "${{ matrix.os }}-Executable.zip" dist/
 
-    - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
+    - name: Upload Release Assets
+      uses: actions/upload-release-asset@v2
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        upload_url: ${{ steps.create_release.outputs.upload_url || steps.create_release.outputs.upload_url_from_other_jobs }}
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
         asset_path: ${{ matrix.os }}-Executable.zip
         asset_name: ${{ matrix.os }}.zip
         asset_content_type: application/zip
