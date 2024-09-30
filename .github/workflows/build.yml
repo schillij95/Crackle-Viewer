@@ -1,4 +1,4 @@
-name: Build and Release Application
+name: Build Application
 
 permissions:
   contents: write
@@ -11,9 +11,12 @@ permissions:
   repository-projects: write
   security-events: write
   statuses: write
-
+  
 on:
   push:
+    branches:
+      - master
+  pull_request:
     branches:
       - master
   workflow_dispatch:
@@ -23,128 +26,84 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-
+        os: [ubuntu-20.04, macos-12, windows-2019]
     steps:
-    - uses: actions/checkout@v3
-
+    - uses: actions/checkout@v2
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v2
       with:
         python-version: '3.11'
-
     - name: Install PyInstaller and Dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install pyinstaller
-
     - name: Build with PyInstaller
       run: |
         pyinstaller crackle_viewer.spec
-
     - name: Upload Artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v2
       with:
-        name: ${{ matrix.os }}-Executable
+        name: ${{ runner.os }}-Executable
         path: dist/*
-
-    # Create release from the latest commit name
-    - name: Create or Update Release
+    - name: Delete Old Releases and Create New Release
       id: create_release
-      uses: actions/github-script@v6
+      uses: actions/github-script@v5
       with:
         script: |
-          const commitMessage = context.payload.head_commit.message.trim().replace(/\s+/g, '-');
-          const owner = context.repo.owner;
-          const repo = context.repo.repo;
-
-          // Check if a release with this commit message already exists
-          let release;
-          try {
-            release = await github.rest.repos.getReleaseByTag({
-              owner: owner,
-              repo: repo,
-              tag: commitMessage
-            });
-            console.log(`Release for tag ${commitMessage} already exists.`);
-          } catch (error) {
-            if (error.status === 404) {
-              console.log(`No release found for tag ${commitMessage}. Creating a new release.`);
-              release = await github.rest.repos.createRelease({
-                owner: owner,
-                repo: repo,
-                tag_name: commitMessage,
-                name: commitMessage,
-                draft: false,
-                prerelease: false,
-                target_commitish: context.sha,
-              });
-            } else {
-              throw error;
-            }
-          }
-
-          core.setOutput('release_id', release.data.id);
-          core.setOutput('upload_url', release.data.upload_url);
-
-    # Delete releases that are not the latest commit
-    - name: Delete Old Releases
-      if: matrix.os == 'ubuntu-latest' # This only needs to be done once, so limit it to one job (Ubuntu)
-      uses: actions/github-script@v6
-      with:
-        script: |
-          const currentCommitMessage = context.payload.head_commit.message.trim().replace(/\s+/g, '-');
-          const owner = context.repo.owner;
-          const repo = context.repo.repo;
-
+          const latestCommitSha = process.env.GITHUB_SHA;
+          const releaseName = `release-${latestCommitSha}`;
+    
           // Get all releases
           const releases = await github.rest.repos.listReleases({
-            owner: owner,
-            repo: repo,
+            owner: context.repo.owner,
+            repo: context.repo.repo
           });
-
-          // Loop through the releases and delete those not matching the current commit message
+    
+          // Delete any releases that do not match the current commit SHA
           for (const release of releases.data) {
-            if (release.tag_name !== currentCommitMessage) {
-              console.log(`Deleting old release: ${release.tag_name}`);
+            if (release.name !== releaseName) {
+              console.log(`Deleting release: ${release.id}`);
               await github.rest.repos.deleteRelease({
-                owner: owner,
-                repo: repo,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
                 release_id: release.id
               });
-
-              // Delete the associated tag if it exists
-              try {
-                await github.rest.git.deleteRef({
-                  owner: owner,
-                  repo: repo,
-                  ref: `tags/${release.tag_name}`,
-                });
-                console.log(`Deleted tag: ${release.tag_name}`);
-              } catch (error) {
-                if (error.status === 404) {
-                  console.log(`Tag ${release.tag_name} does not exist.`);
-                } else {
-                  throw error;
-                }
-              }
             }
           }
-
+    
+          // Create a new release based on the current commit SHA
+          console.log('Creating new release');
+          const newRelease = await github.rest.repos.createRelease({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            tag_name: latestCommitSha, // The tag name is the commit SHA
+            name: releaseName,
+            draft: false,
+            prerelease: false,
+            target_commitish: latestCommitSha
+          });
+    
+          core.setOutput('upload_url', newRelease.data.upload_url);
+    
     - name: Zip Executable and Dependencies
+      shell: pwsh
       run: |
-        if [[ "${{ matrix.os }}" == "Windows" ]]; then
-          powershell Compress-Archive -Path dist/* -DestinationPath "${{ matrix.os }}-Executable.zip"
-        else
-          zip -r "${{ matrix.os }}-Executable.zip" dist/
-
-    - name: Upload Release Assets
-      uses: actions/upload-release-asset@v2
+        $osType = "${{ runner.os }}"
+        if ($osType -eq "Windows") {
+          # PowerShell command for Windows
+          Compress-Archive -Path dist/* -DestinationPath "$osType-Executable.zip"
+        } else {
+          # Use PowerShell's native capabilities to handle Linux/macOS zipping if necessary
+          # Moving to a shell script file if needed
+          & bash -c "cd dist && zip -r ../$osType-Executable.zip ./* && cd .."
+        }
+    - name: Upload Release Asset
+      uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ${{ matrix.os }}-Executable.zip
-        asset_name: ${{ matrix.os }}.zip
+        asset_path: ${{ runner.os }}-Executable.zip
+        asset_name: ${{ runner.os }}.zip
         asset_content_type: application/zip
