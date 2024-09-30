@@ -42,7 +42,7 @@ jobs:
       run: |
         pyinstaller crackle_viewer.spec
     - name: Upload Artifacts
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ runner.os }}-Executable
         path: dist/*
