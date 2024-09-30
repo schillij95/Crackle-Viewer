@@ -8,7 +8,7 @@ a = Analysis(
     ['view_gui.py'],
     pathex=[],
     binaries=[],
-    datas=[('crackle_viewer.png', '.')],
+    datas=[('crackle_viewer.png', '.'), ('PIL', 'PIL')],
     hiddenimports=['PIL._tkinter_finder', 'PIL._imaging', 'PIL._imagingft', 'PIL._imagingtk'],
     hookspath=[],
     hooksconfig={},
