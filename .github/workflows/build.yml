@@ -11,7 +11,7 @@ permissions:
   repository-projects: write
   security-events: write
   statuses: write
-  
+
 on:
   push:
     branches:
@@ -27,6 +27,13 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-20.04, macos-12, windows-2019]
+        include:
+          - os: ubuntu-20.04
+            create_release: true
+          - os: macos-12
+            create_release: false
+          - os: windows-2019
+            create_release: false
     steps:
     - uses: actions/checkout@v2
     - name: Set up Python
@@ -41,23 +48,24 @@ jobs:
     - name: Build with PyInstaller
       run: |
         pyinstaller crackle_viewer.spec
+
     - name: Upload Artifacts
       uses: actions/upload-artifact@v2
       with:
-        name: ${{ runner.os }}-Executable
+        name: ${{ matrix.os }}-Executable
         path: dist/*
+
+    # Step to create/delete the release is only run on one OS (Ubuntu in this case)
     - name: Delete Old Release and Create New Release
+      if: matrix.create_release == 'true'
       id: create_release
       uses: actions/github-script@v5
       with:
         script: |
           const tag = 'latest-release';
-    
-          // Get the latest commit SHA on the current branch (master)
           const latestCommit = process.env.GITHUB_SHA;
-    
-          // Attempt to get the release by tag
           let release;
+
           try {
             release = await github.rest.repos.getReleaseByTag({
               owner: context.repo.owner,
@@ -71,8 +79,7 @@ jobs:
               throw error;
             }
           }
-    
-          // If release exists, delete it
+
           if (release) {
             console.log(`Deleting existing release: ${release.data.id}`);
             await github.rest.repos.deleteRelease({
@@ -82,8 +89,7 @@ jobs:
             });
             console.log(`Deleted release: ${release.data.id}`);
           }
-    
-          // Create a new release with the latest commit SHA
+
           console.log('Creating new release');
           const newRelease = await github.rest.repos.createRelease({
             owner: context.repo.owner,
@@ -92,46 +98,24 @@ jobs:
             name: 'Latest Release',
             draft: false,
             prerelease: false,
-            target_commitish: latestCommit // Ensure release points to the latest commit
+            target_commitish: latestCommit
           });
-    
+
           core.setOutput('upload_url', newRelease.data.upload_url);
-          
-          // Optionally, clean up existing assets associated with the deleted release
-          const assets = await github.rest.repos.listReleaseAssets({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            release_id: newRelease.data.id,
-          });
-    
-          for (const asset of assets.data) {
-            if (asset.name === '${{ runner.os }}.zip') {
-              await github.rest.repos.deleteReleaseAsset({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                asset_id: asset.id
-              });
-              console.log(`Deleted existing asset: ${asset.name}`);
-            }
-          }
+
     - name: Zip Executable and Dependencies
-      shell: pwsh
       run: |
-        $osType = "${{ runner.os }}"
-        if ($osType -eq "Windows") {
-          # PowerShell command for Windows
-          Compress-Archive -Path dist/* -DestinationPath "$osType-Executable.zip"
-        } else {
-          # Use PowerShell's native capabilities to handle Linux/macOS zipping if necessary
-          # Moving to a shell script file if needed
-          & bash -c "cd dist && zip -r ../$osType-Executable.zip ./* && cd .."
-        }
+        if [[ "${{ matrix.os }}" == "Windows" ]]; then
+          powershell Compress-Archive -Path dist/* -DestinationPath "${{ matrix.os }}-Executable.zip"
+        else
+          zip -r "${{ matrix.os }}-Executable.zip" dist/
+
     - name: Upload Release Asset
       uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ${{ runner.os }}-Executable.zip
-        asset_name: ${{ runner.os }}.zip
+        upload_url: ${{ steps.create_release.outputs.upload_url || steps.create_release.outputs.upload_url_from_other_jobs }}
+        asset_path: ${{ matrix.os }}-Executable.zip
+        asset_name: ${{ matrix.os }}.zip
         asset_content_type: application/zip
