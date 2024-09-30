@@ -52,8 +52,9 @@ jobs:
       with:
         script: |
           const latestCommitSha = process.env.GITHUB_SHA.substring(0, 7); // Use the first 7 characters of the SHA
+          const fullCommitSha = process.env.GITHUB_SHA; // Use the full commit SHA for commit reference
           const releaseName = `release-${latestCommitSha}`;
-          const tagName = `v1.0.0-${latestCommitSha}`; // Prefix to make it a valid tag
+          const tagName = `v1.0.0-${latestCommitSha}`; // Use a valid tag format
     
           // Get all releases
           const releases = await github.rest.repos.listReleases({
@@ -82,7 +83,7 @@ jobs:
             name: releaseName,
             draft: false,
             prerelease: false,
-            target_commitish: latestCommitSha
+            target_commitish: fullCommitSha // Use full commit SHA for commitish
           });
     
           core.setOutput('upload_url', newRelease.data.upload_url);
@@ -96,7 +97,6 @@ jobs:
           Compress-Archive -Path dist/* -DestinationPath "$osType-Executable.zip"
         } else {
           # Use PowerShell's native capabilities to handle Linux/macOS zipping if necessary
-          # Moving to a shell script file if needed
           & bash -c "cd dist && zip -r ../$osType-Executable.zip ./* && cd .."
         }
     - name: Upload Release Asset
