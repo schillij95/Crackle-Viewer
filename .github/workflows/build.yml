@@ -42,78 +42,50 @@ jobs:
       run: |
         pyinstaller crackle_viewer.spec
     - name: Upload Artifacts
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ runner.os }}-Executable
         path: dist/*
-    - name: Delete Old Release and Create New Release
+
+    - name: Create or Get Release
       id: create_release
       uses: actions/github-script@v5
       with:
         script: |
-          const tag = 'latest-release';
-    
-          // Get the latest commit SHA on the current branch (master)
-          const latestCommit = process.env.GITHUB_SHA;
-    
-          // Attempt to get the release by tag
+          const latestCommitSha = process.env.GITHUB_SHA.substring(0, 7); // Use the first 7 characters of the SHA
+          const fullCommitSha = process.env.GITHUB_SHA; // Full commit SHA for commitish
+          const releaseName = `release-${latestCommitSha}`;
+          const tagName = `v1.0.0-${latestCommitSha}`; // Valid tag name
+
           let release;
           try {
+            // Try to get the release by tag
             release = await github.rest.repos.getReleaseByTag({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              tag: tag
+              tag: tagName
             });
+            console.log(`Release already exists: ${release.data.id}`);
           } catch (error) {
             if (error.status === 404) {
-              console.log('No existing release found with the tag, creating a new one.');
+              // If release does not exist, create a new one
+              console.log('Creating new release');
+              release = await github.rest.repos.createRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag_name: tagName,
+                name: releaseName,
+                draft: false,
+                prerelease: false,
+                target_commitish: fullCommitSha
+              });
             } else {
               throw error;
             }
           }
+
+          core.setOutput('upload_url', release.data.upload_url);
     
-          // If release exists, delete it
-          if (release) {
-            console.log(`Deleting existing release: ${release.data.id}`);
-            await github.rest.repos.deleteRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: release.data.id
-            });
-            console.log(`Deleted release: ${release.data.id}`);
-          }
-    
-          // Create a new release with the latest commit SHA
-          console.log('Creating new release');
-          const newRelease = await github.rest.repos.createRelease({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            tag_name: tag,
-            name: 'Latest Release',
-            draft: false,
-            prerelease: false,
-            target_commitish: latestCommit // Ensure release points to the latest commit
-          });
-    
-          core.setOutput('upload_url', newRelease.data.upload_url);
-          
-          // Optionally, clean up existing assets associated with the deleted release
-          const assets = await github.rest.repos.listReleaseAssets({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            release_id: newRelease.data.id,
-          });
-    
-          for (const asset of assets.data) {
-            if (asset.name === '${{ runner.os }}.zip') {
-              await github.rest.repos.deleteReleaseAsset({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                asset_id: asset.id
-              });
-              console.log(`Deleted existing asset: ${asset.name}`);
-            }
-          }
     - name: Zip Executable and Dependencies
       shell: pwsh
       run: |
@@ -123,9 +95,9 @@ jobs:
           Compress-Archive -Path dist/* -DestinationPath "$osType-Executable.zip"
         } else {
           # Use PowerShell's native capabilities to handle Linux/macOS zipping if necessary
-          # Moving to a shell script file if needed
           & bash -c "cd dist && zip -r ../$osType-Executable.zip ./* && cd .."
         }
+
     - name: Upload Release Asset
       uses: actions/upload-release-asset@v1
       env:
