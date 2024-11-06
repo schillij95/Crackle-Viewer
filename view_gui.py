@@ -64,6 +64,8 @@ class Application(tk.Frame):
         self.reset_transform()
         self.image_list = []
         self.image_index = 0
+        self.last_directory_overlay = None
+        self.last_directory_suboverlay = None
         self.cursor_circle = None
         self.shift_pressed = False
         self.mouse_is_pressed = False
@@ -451,15 +453,19 @@ class Application(tk.Frame):
         )
         if images_path:
             self.last_directory = images_path
-            print(self.last_directory)
-            self.images_folder = self.last_directory.rsplit('/', 1)[-1]
+            # Create surface volume dir
+            surface_volume_path = os.path.join(images_path, "layers")
+            if not os.path.exists(surface_volume_path):
+                 surface_volume_path = os.path.join(images_path, "surface_volume")
+            print(surface_volume_path)
+            self.images_folder = surface_volume_path.rsplit('/', 1)[-1]
             self.save_last_directory()  # Save the last_directory
-            self.image_list = sorted(glob.glob(os.path.join(self.last_directory, f'*.tif')))
+            self.image_list = sorted(glob.glob(os.path.join(surface_volume_path, f'*.tif')))
             #hacky way to get png and jpg file stacks
             if len(self.image_list) == 0:
-                self.image_list = sorted(glob.glob(os.path.join(self.last_directory, f'*.png')))
+                self.image_list = sorted(glob.glob(os.path.join(surface_volume_path, f'*.png')))
             if len(self.image_list) == 0:
-                self.image_list = sorted(glob.glob(os.path.join(self.last_directory, f'*.jpg')))
+                self.image_list = sorted(glob.glob(os.path.join(surface_volume_path, f'*.jpg')))
             if len(self.image_list) == 0:
                 print("No tif, png or jpg images found in the directory.")
             self.image_index = len(self.image_list) // 2
@@ -469,13 +475,14 @@ class Application(tk.Frame):
             self.set_image(self.image_list[self.image_index])
 
     def load_overlay_image(self):
-        initial_dir = os.path.dirname(self.last_directory) if self.last_directory else os.getcwd()
+        initial_dir = self.last_directory_overlay if self.last_directory_overlay else self.last_directory if self.last_directory else os.getcwd()
         try:
             file_path = tk.filedialog.askopenfilename(filetypes=[('PNG files', '*.png')], initialdir=initial_dir)
         except:
             file_path = tk.filedialog.askopenfilename(filetypes=[('PNG files', '*.png')], initialdir=os.getcwd())
         if file_path:
-            print(file_path, self.last_directory)
+            self.last_directory_overlay = file_path
+            print(file_path, self.last_directory_overlay)
             self.overlay_image = Image.open(file_path).convert("L")
             # self.overlay_image = Image.fromarray(np.uint8(np.array(Image.open(file_path)))).convert("L")
             if len(self.sub_overlays) == 0:
@@ -484,7 +491,6 @@ class Application(tk.Frame):
                 self.sub_overlays[0] = self.overlay_image
             self.redraw_image()
             # strip the file name from the path and save directory
-            self.last_directory = file_path.rsplit('/', 1)[0] + "/" + self.images_folder
             self.sub_overlay_names[0] = file_path.rsplit('/', 1)[-1]
             self.update_suboverlay_dropdown()
 
@@ -505,12 +511,13 @@ class Application(tk.Frame):
 
     # Method to load SubOverlay
     def load_suboverlay(self):
-        initial_dir = os.path.dirname(self.last_directory) if self.last_directory else os.getcwd()
+        initial_dir = self.last_directory_suboverlay if self.last_directory_suboverlay else self.last_directory if self.last_directory else os.getcwd()
         try:
             file_path = tk.filedialog.askopenfilename(filetypes=[('PNG files', '*.png'), ('TIF files', '*.tif')], initialdir=initial_dir)
         except:
             file_path = tk.filedialog.askopenfilename(filetypes=[('PNG files', '*.png'), ('TIF files', '*.tif')], initialdir=os.getcwd())
         if file_path:
+            self.last_directory_suboverlay = file_path
             if ".png" in file_path:
                 sub_overlay = Image.open(file_path).convert("L")
             elif ".tif" in file_path:
@@ -520,7 +527,6 @@ class Application(tk.Frame):
             self.sub_overlays.append(sub_overlay)
             self.redraw_image()
             # strip the file name from the path and save directory
-            self.last_directory = file_path.rsplit('/', 1)[0] + "/" + self.images_folder
             self.sub_overlay_names.append(file_path.rsplit('/', 1)[-1])
             if len(self.sub_overlay_names) >= len(self.sub_overlay_colors):
                 self.sub_overlay_colors.append(self.sub_overlay_colors[len(self.sub_overlay_colors)-1])
@@ -568,7 +574,7 @@ class Application(tk.Frame):
 
     def save_overlay(self):
         if self.overlay_image:
-            initial_dir = os.path.dirname(self.last_directory) if self.last_directory else os.getcwd()
+            initial_dir = self.last_directory_overlay if self.last_directory_overlay else os.getcwd()
             try:
                 save_path = tk.filedialog.asksaveasfilename(filetypes=[('PNG files', '*.png')], initialdir=initial_dir)
             except:
@@ -578,8 +584,6 @@ class Application(tk.Frame):
                 # Convert to grayscale and remove alpha channel
                 bw_image = self.overlay_image.convert("1")
                 bw_image.save(save_path)
-                # strip the file name from the path and save directory
-                self.last_directory = save_path.rsplit('/', 1)[0] + "/" + self.images_folder
 
     def save_combined_overlays(self):
         if self.pil_image:
@@ -595,7 +599,7 @@ class Application(tk.Frame):
                 combined = ImageChops.lighter(combined, self.overlay_image.convert("L"))
 
             # Save the combined image in grayscale and without an alpha channel
-            initial_dir = os.path.dirname(self.last_directory) if self.last_directory else os.getcwd()
+            initial_dir = self.last_directory_overlay if self.last_directory_overlay else os.getcwd()
             try:
                 save_path = tk.filedialog.asksaveasfilename(filetypes=[('PNG files', '*.png')], initialdir=initial_dir)
             except:
@@ -604,15 +608,13 @@ class Application(tk.Frame):
             if save_path:
                 bw_combined = combined.convert("1")
                 bw_combined.save(save_path)
-                # strip the file name from the path and save directory
-                self.last_directory = save_path.rsplit('/', 1)[0] + "/" + self.images_folder
 
     def save_displayed_image(self):
         if self.pil_image is None:
             tk.messagebox.showerror("Error", "No image to save.")
             return
 
-        initial_dir = os.path.dirname(self.last_directory) if self.last_directory else os.getcwd()
+        initial_dir = self.last_directory_overlay if self.last_directory_overlay else os.getcwd()
         # Asks the user for the location and name of the file to save
         try:
             file_path = tk.filedialog.asksaveasfilename(
