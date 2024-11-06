@@ -18,7 +18,8 @@ import sys
 import glob
 from tqdm import tqdm
 from multiprocessing import Pool
-
+from scipy.spatial import KDTree
+import open3d as o3d
 
 def load_image_disk(filename):
     pil_image = np.array(Image.open(filename))
@@ -29,6 +30,82 @@ def load_image_disk(filename):
 
 def load_image_parallel(filename):
     return filename, load_image_disk(filename)
+
+def compute_uv_bounding_box(uv_vertices):
+    """Compute the bounding box of a triangle in UV space."""
+    min_uv = np.min(uv_vertices, axis=0)
+    max_uv = np.max(uv_vertices, axis=0)
+    return min_uv, max_uv
+
+def preprocess_uv_triangles(mesh):
+    """Preprocess the mesh to create a KDTree with UV bounding boxes."""
+    bounding_boxes = []
+    triangle_data = []
+    min_uv_ = np.array([1000, 1000])
+    max_uv_ = np.array([-10000, -10000])
+    triangle_uvs = np.array(mesh.triangle_uvs).reshape((-1,3,2))
+    
+    for i, triangle in enumerate(mesh.triangles):
+        # Get the UV coordinates of the vertices of this triangle
+        uv_vertices = triangle_uvs[i]
+        
+        # Calculate the bounding box for this triangle in UV space
+        min_uv, max_uv = compute_uv_bounding_box(uv_vertices)
+        min_uv_ = np.minimum(min_uv_, min_uv)
+        max_uv_ = np.maximum(max_uv_, max_uv)
+        
+        # Use the center of the bounding box as the KDTree point and store the data
+        center_uv = (min_uv + max_uv) / 2
+        bounding_boxes.append(center_uv)
+        triangle_data.append((triangle, uv_vertices, min_uv, max_uv))
+    
+    print(f"UV bounding box: {min_uv_} - {max_uv_}")
+    # Create KDTree for the bounding boxes' centers
+    kd_tree = KDTree(bounding_boxes)
+    return kd_tree, triangle_data
+
+def barycentric_coordinates(p, a, b, c):
+    # Calculate vectors from a to b, a to c, and a to p
+    v0 = b - a
+    v1 = c - a
+    v2 = p - a
+
+    # Compute dot products
+    d00 = np.dot(v0, v0)
+    d01 = np.dot(v0, v1)
+    d11 = np.dot(v1, v1)
+    d20 = np.dot(v2, v0)
+    d21 = np.dot(v2, v1)
+
+    # Compute denominator
+    denom = d00 * d11 - d01 * d01
+
+    # Barycentric coordinates
+    v = (d11 * d20 - d01 * d21) / denom
+    w = (d00 * d21 - d01 * d20) / denom
+    u = 1.0 - v - w
+    return u, v, w
+
+def find_uv_triangle(mesh_vertices, uv_point, kd_tree, triangle_data):
+    """Find the 3D point corresponding to a 2D UV point by querying preprocessed triangles."""
+    # Query KDTree for nearby bounding boxes
+    _, idxs = kd_tree.query(uv_point, k=500)  # Adjust `k` as needed for balance between precision and performance
+    
+    for idx in idxs:
+        triangle, uv_vertices, min_uv, max_uv = triangle_data[idx]
+        
+        # First, check if the point is within the bounding box in UV space
+        if np.all(uv_point >= min_uv) and np.all(uv_point <= max_uv):
+            # Calculate barycentric coordinates
+            u, v, w = barycentric_coordinates(uv_point, uv_vertices[0], uv_vertices[1], uv_vertices[2])
+            if u >= 0 and v >= 0 and w >= 0:
+                # Retrieve the 3D vertices and interpolate
+                vertices = np.array([mesh_vertices[i] for i in triangle])
+                point_3d = u * vertices[0] + v * vertices[1] + w * vertices[2]
+                return point_3d
+    
+    # If no triangle contains the uv point
+    return None
 
 class Application(tk.Frame):
     def __init__(self, master=None):
@@ -89,6 +166,7 @@ class Application(tk.Frame):
 
     def menu_open_clicked(self, event=None):
         self.load_images()
+        self.load_obj()
 
     def menu_quit_clicked(self):
         self.master.destroy() 
@@ -314,7 +392,7 @@ class Application(tk.Frame):
 
         frame_statusbar = tk.Frame(self.master, bd=1, relief = tk.SUNKEN)
         self.label_image_info = tk.Label(frame_statusbar, text="image info", anchor=tk.E, padx = 5)
-        self.label_image_pixel = tk.Label(frame_statusbar, text="(x, y)", anchor=tk.W, padx = 5)
+        self.label_image_pixel = tk.Label(frame_statusbar, text="2D: (x, y) 3D: (x, y, z)", anchor=tk.W, padx = 5)
         self.label_image_info.pack(side=tk.RIGHT)
         self.label_image_pixel.pack(side=tk.LEFT)
         frame_statusbar.pack(side=tk.BOTTOM, fill=tk.X)
@@ -473,6 +551,25 @@ class Application(tk.Frame):
             if self.preload_images_var.get():
                 self.preload_all_images()
             self.set_image(self.image_list[self.image_index])
+    
+    def load_obj(self):
+        # Load the obj file(s) from the self.last_directory
+        obj_files = sorted(glob.glob(os.path.join(self.last_directory, f'*.obj')))
+        # filter the obj files with uv coordinates. load and check
+        obj_file = None
+        for obj in obj_files:
+            # open3d open
+            mesh = o3d.io.read_triangle_mesh(obj)
+            if len(mesh.triangle_uvs) > 0:
+                obj_file = obj
+                break
+        if obj_file:
+            print(f"Loaded obj file: {obj_file}")
+            self.mesh = o3d.io.read_triangle_mesh(obj_file)
+            self.mesh_vertices = np.array(self.mesh.vertices)
+            print("Preprocessing obj transformation ... ")
+            self.kd_tree, self.triangle_data = preprocess_uv_triangles(self.mesh)
+            print("Preprocessing obj transformation done.")
 
     def load_overlay_image(self):
         initial_dir = self.last_directory_overlay if self.last_directory_overlay else self.last_directory if self.last_directory else os.getcwd()
@@ -852,9 +949,13 @@ class Application(tk.Frame):
         
         image_point = self.to_image_point(event.x, event.y)
         if image_point != []:
-            self.label_image_pixel["text"] = (f"({image_point[0]:.2f}, {image_point[1]:.2f})")
+            uv_point = np.array([image_point[0] / self.pil_image.width, 1.0 - image_point[1] / self.pil_image.height])
+            point_3d = find_uv_triangle(self.mesh_vertices, uv_point, self.kd_tree, self.triangle_data)
+            if point_3d is None:
+                point_3d = ["--", "--", "--"]
+            self.label_image_pixel["text"] = (f"2D: ({image_point[0]:.2f}, {image_point[1]:.2f}) 3D: ({point_3d[0]:.2f}, {point_3d[1]:.2f}, {point_3d[2]:.2f})")
         else:
-            self.label_image_pixel["text"] = ("(--, --)")
+            self.label_image_pixel["text"] = ("2D: (--, --) 3D: (--, --, --)")
 
     def mouse_leave_canvas(self, event):
         if self.cursor_circle:
