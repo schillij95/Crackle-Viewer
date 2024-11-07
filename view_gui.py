@@ -20,6 +20,7 @@ from tqdm import tqdm
 from multiprocessing import Pool
 from scipy.spatial import KDTree
 import open3d as o3d
+import cv2
 
 def load_image_disk(filename):
     pil_image = np.array(Image.open(filename))
@@ -365,6 +366,16 @@ class Application(tk.Frame):
         self.direction_var.trace("w", lambda name, index, mode: self.process_images())
 
         # Preload Images Checkbox
+        self.toggle_contrast_var = tk.BooleanVar(value=False)
+        self.toggle_contrast_check = tk.Checkbutton(
+            self.image_processing_frame, 
+            text="Contrast Enhance", 
+            variable=self.toggle_contrast_var,
+            command=self.toggle_contrast
+        )
+        self.toggle_contrast_check.pack(side=tk.LEFT)
+
+        # Preload Images Checkbox
         self.preload_images_var = tk.BooleanVar(value=False)
         self.preload_images_check = tk.Checkbutton(
             self.image_processing_frame, 
@@ -489,6 +500,9 @@ class Application(tk.Frame):
                 self.last_directory = file.read().strip()
         except FileNotFoundError:
             self.last_directory = None
+
+    def toggle_contrast(self):
+        self.process_images()
 
     def toggle_preload(self):
         if self.preload_images_var.get():
@@ -807,6 +821,12 @@ class Application(tk.Frame):
             end_index = self.image_index + 1
         return start_index, end_index
     
+    def enhance_image(self, image):
+        if self.toggle_contrast_var.get():
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(12,12))
+            image = clahe.apply(image.astype(np.uint8))
+        return image
+    
     def process_images(self):
         radius = int(self.radius_var.get())
         direction = self.direction_var.get()
@@ -830,6 +850,9 @@ class Application(tk.Frame):
                 result_image = (result_image - (self.min_value / 256.0)) * ( 65535.0 / (self.max_value - self.min_value))
                 result_image = np.clip(result_image, 0, 255)
             result_image = result_image.astype(np.uint8)
+
+            result_image = self.enhance_image(result_image)
+
             self.pil_image = Image.fromarray(result_image).convert("L")
             self.redraw_image()
 
@@ -953,7 +976,9 @@ class Application(tk.Frame):
             point_3d = find_uv_triangle(self.mesh_vertices, uv_point, self.kd_tree, self.triangle_data)
             if point_3d is None:
                 point_3d = ["--", "--", "--"]
-            self.label_image_pixel["text"] = (f"2D: ({image_point[0]:.2f}, {image_point[1]:.2f}) 3D: ({point_3d[0]:.2f}, {point_3d[1]:.2f}, {point_3d[2]:.2f})")
+            else:
+                point_3d = [f"{point_3d[0]:.2f}", f"{point_3d[1]:.2f}", f"{point_3d[2]:.2f}"]
+            self.label_image_pixel["text"] = (f"2D: ({image_point[0]:.2f}, {image_point[1]}) 3D: ({point_3d[0]}, {point_3d[1]}, {point_3d[2]})")
         else:
             self.label_image_pixel["text"] = ("2D: (--, --) 3D: (--, --, --)")
 
