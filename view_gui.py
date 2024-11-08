@@ -167,7 +167,10 @@ class Application(tk.Frame):
 
     def menu_open_clicked(self, event=None):
         self.load_images()
-        self.load_obj()
+        try:
+            self.load_obj()
+        except:
+            pass
 
     def menu_quit_clicked(self):
         self.master.destroy() 
@@ -978,9 +981,9 @@ class Application(tk.Frame):
                 point_3d = ["--", "--", "--"]
             else:
                 point_3d = [f"{point_3d[0]:.2f}", f"{point_3d[1]:.2f}", f"{point_3d[2]:.2f}"]
-            self.label_image_pixel["text"] = (f"2D: ({image_point[0]:.2f}, {image_point[1]}) 3D: ({point_3d[0]}, {point_3d[1]}, {point_3d[2]})")
+            self.label_image_pixel["text"] = (f"2D: (x: {image_point[0]:.2f}, y: {image_point[1]}) 3D: (x: {point_3d[0]}, y: {point_3d[1]}, z: {point_3d[2]})")
         else:
-            self.label_image_pixel["text"] = ("2D: (--, --) 3D: (--, --, --)")
+            self.label_image_pixel["text"] = ("2D: (x: --, y: --) 3D: (x: --, y: --, z: --)")
 
     def mouse_leave_canvas(self, event):
         if self.cursor_circle:
