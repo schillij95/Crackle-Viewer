@@ -1,3 +1,6 @@
+# This repository has been archived and is beeing further developed by the monorepo of the Vesuvius Organization Team over at https://github.com/ScrollPrize/villa/tree/main/crackle-viewer
+
+Thank you to everyone who helped develop it and continues to do so.
 
 # Crackle-Viewer
 
